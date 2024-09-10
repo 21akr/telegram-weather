@@ -1,14 +1,20 @@
 import TelegramBot from 'node-telegram-bot-api';
 import NodeCache from 'node-cache';
-import { getWeatherData, getWeatherForSeveralDays } from './scraper';
+import { getWeatherData } from './scraper';
+import { getWeatherForSeveralDays} from "./forecast";
 
 const token = '7336636912:AAHOifJwE1PcAf1-RkY0Z71laH_QNInNSiQ';
-const bot = new TelegramBot(token, {polling: true});
-const cache = new NodeCache({stdTTL: 600}); // Cache data for 10 minutes
+const bot = new TelegramBot(token, {
+  polling: {
+    interval: 1000,
+    autoStart: true
+  }
+});
+const cache = new NodeCache({stdTTL: 600});
 
-// Default unit and city
-let unit = 'C'; // Celsius by default
-let currentCity = 'London';
+let unit = 'C';
+let currentCity = 'Tashkent';
+let waitingForCity = false;
 
 bot.onText(/\/start/, (msg) => {
   bot.sendMessage(msg.chat.id, 'Welcome! Use /weather to get the current weather.');
@@ -20,8 +26,7 @@ bot.onText(/\/weather/, async (msg) => {
 
     const cacheKey = `${currentCity}_${unit}`;
     let weather: string | undefined = cache.get(cacheKey);
-
-    if(!weather) {
+    if (!weather) {
       weather = await getWeatherData(currentCity, unit);
       cache.set(cacheKey, weather);
     }
@@ -33,12 +38,18 @@ bot.onText(/\/weather/, async (msg) => {
   }
 });
 
-bot.onText(/\/switch_city (.+)/, (msg, match) => {
-  if(match) {
-    currentCity = match[1];
+bot.onText(/\/switch_city/, (msg) => {
+  waitingForCity = true;
+  bot.sendMessage(msg.chat.id, 'Please enter the city name:');
+});
+
+bot.on('message', (msg) => {
+  if (waitingForCity && msg.text && !msg.text.startsWith('/')) {
+    currentCity = msg.text.trim();
+    waitingForCity = false;
     bot.sendMessage(msg.chat.id, `City switched to ${currentCity}.`);
-  } else {
-    bot.sendMessage(msg.chat.id, 'Invalid command. Use /switch_city <city_name>');
+  } else if (msg.text && !msg.text.startsWith('/')) {
+    bot.sendMessage(msg.chat.id, 'Unknown command. Use /weather, /switch_city, /switch_unit, or /forecast.');
   }
 });
 
@@ -49,17 +60,21 @@ bot.onText(/\/switch_unit/, (msg) => {
 
 bot.onText(/\/forecast/, async (msg) => {
   try {
-    const weatherForecast = await getWeatherForSeveralDays(currentCity, unit);
-    await bot.sendMessage(msg.chat.id, weatherForecast);
+    const chatId = msg.chat.id;
+
+    const weatherForecast = await getWeatherForSeveralDays( currentCity);
+
+    await bot.sendMessage(chatId, weatherForecast);
   } catch (error) {
     console.error(error);
     await bot.sendMessage(msg.chat.id, 'Error: Could not fetch weather forecast.');
   }
 });
 
+
 bot.on('location', async (msg) => {
   const location = msg.location;
-  if(location) {
+  if (location) {
     // const city = await getCityFromCoordinates(location.latitude, location.longitude);
     // currentCity = city;
     console.log(location)
@@ -68,9 +83,7 @@ bot.on('location', async (msg) => {
   }
 });
 
-bot.on('message', (msg) => {
-  if(msg.text && !msg.text.startsWith('/')) {
-    bot.sendMessage(msg.chat.id, 'Unknown command. Use /weather, /switch_city, /switch_unit, or /forecast.');
-  }
+bot.on('polling_error', (error) => {
+  console.error('Polling error:', error.stack, error.message);
 });
 
